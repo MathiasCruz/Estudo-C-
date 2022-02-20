@@ -6,8 +6,11 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.OpenApi.Models;
 using Polly;
+using Polly.Extensions.Http;
+using Serilog;
 using Shopping.Aggregator.Services;
 using System;
+using System.Net.Http;
 
 namespace Shopping.Aggregator
 {
@@ -27,17 +30,21 @@ namespace Shopping.Aggregator
 
             services.AddHttpClient<ICatalogService, CatalogService>(c =>
                 c.BaseAddress = new Uri(Configuration["ApiSettings:CatalogUrl"]))
-                 .AddHttpMessageHandler<LoggingDelegatingHandler>(); 
+                 .AddHttpMessageHandler<LoggingDelegatingHandler>()
+                 .AddPolicyHandler(GetRetryPolicy())
+                 .AddPolicyHandler(GetCircuitBreakPolicy());
 
             services.AddHttpClient<IBasketService, BasketService>(c =>
                 c.BaseAddress = new Uri(Configuration["ApiSettings:BasketUrl"]))
                 .AddHttpMessageHandler<LoggingDelegatingHandler>()
-                .AddTransientHttpErrorPolicy(policy => policy.WaitAndRetryAsync(3, _ => TimeSpan.FromSeconds(2)))
-                .AddTransientHttpErrorPolicy(Policy => Policy.CircuitBreakerAsync(5, TimeSpan.FromSeconds(30)));
+                .AddPolicyHandler(GetRetryPolicy())
+                .AddPolicyHandler(GetCircuitBreakPolicy());
 
             services.AddHttpClient<IOrderService, OrderService>(c =>
                 c.BaseAddress = new Uri(Configuration["ApiSettings:OrderingUrl"]))
-                .AddHttpMessageHandler<LoggingDelegatingHandler>();
+                .AddHttpMessageHandler<LoggingDelegatingHandler>()
+                .AddPolicyHandler(GetRetryPolicy())
+                .AddPolicyHandler(GetCircuitBreakPolicy());
 
             services.AddControllers();
             services.AddSwaggerGen(c =>
@@ -64,6 +71,28 @@ namespace Shopping.Aggregator
             {
                 endpoints.MapControllers();
             });
+        }
+
+        private static IAsyncPolicy<HttpResponseMessage> GetRetryPolicy()
+        {
+            return HttpPolicyExtensions
+                .HandleTransientHttpError()
+                .WaitAndRetryAsync(
+                    retryCount: 5,
+                    sleepDurationProvider: retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)),
+                    onRetry: (exception, retryCount, context) =>
+                     {
+                         Log.Error($"Retry {retryCount} of {context.PolicyKey} at {context.OperationKey}, due to: {exception}");
+                     });
+        }
+
+        private static IAsyncPolicy<HttpResponseMessage> GetCircuitBreakPolicy()
+        {
+            return HttpPolicyExtensions
+                .HandleTransientHttpError()
+                .CircuitBreakerAsync(
+                    handledEventsAllowedBeforeBreaking: 5,
+                    durationOfBreak: TimeSpan.FromSeconds(30));
         }
     }
 }
