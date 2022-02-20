@@ -36,7 +36,7 @@ namespace Ordering.API.Extensions
                                 Log.Error($"Retry {retryCount} of {context.PolicyKey} at {context.OperationKey}, due to: {exception}");
                             });
 
-                    InvokeSeeder(seeder, context, services);
+                    retry.Execute( () => InvokeSeeder(seeder, context, services));
 
                     logger.LogInformation("Migrated database associated with context {DbContextName}", typeof(TContext).Name);
                 }
